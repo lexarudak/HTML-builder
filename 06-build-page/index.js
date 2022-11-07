@@ -1,11 +1,12 @@
 const fs = require('fs')
+const fsp = require('fs/promises');
 const path = require('path')
 const assets = path.join(__dirname, 'assets')
 const newAssets = path.join(__dirname, 'project-dist', 'assets')
 const styleFolder = path.join(__dirname, 'styles')
 const cssBundle = path.join(__dirname, 'project-dist', 'style.css')
-const template = path.join(__dirname, 'template.html')
-const components = path.join(__dirname, 'components')
+const templateFile = path.join(__dirname, 'template.html')
+const componentsFiles = path.join(__dirname, 'components')
 const newHtml = path.join(__dirname, 'project-dist', 'index.html')
 
 
@@ -31,61 +32,61 @@ function copy(dir, newDir) {
   })
 }
 
-fs.rm(newAssets, { recursive: true, force: true }, () => {
-  fs.mkdir(newAssets, { recursive: true }, () => {
-    copy(assets, newAssets)
-    fs.readdir(styleFolder, (err, data) => {
-      const arr = []
-      data.forEach((val, index) => {
-        const ext = path.extname(val) 
-        if (ext === '.css') {
-          const stream = new fs.ReadStream(path.join(styleFolder, val), {encoding: 'utf-8'})
-          let allText = ''
-          stream.on('readable', () => {
-            const text = stream.read()
-            if (text !== null) {
-              allText += text
-            }
-          })
-          stream.on('end', () => {
-            arr.push(allText)
-            const writeText = arr.join('\n')
-            const writeStream = fs.createWriteStream(cssBundle)
-            writeStream.write(writeText)
-          })
-        }
-      })
+function readStream(stream) {
+  return new Promise((resolve, reject) => {
+    let allText = ''
+    stream.on('data', (chunk) => {
+      allText += chunk
     })
-    fs.readFile(template, (err, data) => {
-      const arr = data.toString().split('\n')
-      const cleanArr = arr.map(val => {
-        return val.trim()
-      })
-      fs.readdir(components, {withFileTypes: true}, (err, data) => {
-        data.forEach(val => {
-          if (val.isFile()) {
-            fs.stat(path.join(components ,val.name), (err, data) => {
-              const name = val.name.replace(path.extname(val.name), '')
-              const ext = path.extname(val.name).replace('.', '')
-              if (ext === 'html') {
-                const stream = new fs.ReadStream(path.join(components ,val.name), {encoding: 'utf-8'})
-                let allText = ''
-                stream.on('readable', () => {
-                  const text = stream.read()
-                  if (text !== null) {
-                    allText += text
-                  }
-                })
-                stream.on('end', () => {
-                  arr[cleanArr.indexOf(`{{${name}}}`)] = `${allText}`
-                  const writeStream = fs.createWriteStream(newHtml)
-                  writeStream.write(arr.join('\n'))
-                })
-              }
-            })
-          }
-        })
-      })
-    })
+    stream.on('end', () => {
+      resolve(allText)
+    });
+  });
+}
+
+
+
+async function makeTextArr (folder, exts) {
+  const textArr = []
+  const textArrWithName = []
+  const arr = await fsp.readdir(folder, {withFileTypes: true})
+  for (let item of arr) {
+    const ext = path.extname(item.name)
+    if (ext === exts && item.isFile()) {
+      const stream = new fs.ReadStream(path.join(folder, item.name), {encoding: 'utf-8'})
+      const text = await readStream(stream)
+      textArr.push(text)
+      const smallArr = []
+      const name = item.name.replace(path.extname(item.name), '')
+      smallArr.push(name, text)
+      textArrWithName.push(smallArr)
+    }
+  }
+  return {
+    textArr: textArr,
+    textArrWithName: textArrWithName
+  }
+}
+
+async function mergeStyles (folder, exts, way) {
+  const stylesArr = await makeTextArr(folder, exts)
+  const writeStreamScc = fs.createWriteStream(way)
+  writeStreamScc.write(stylesArr.textArr.join('\n'))
+}
+
+async function setHtml () {
+  await fsp.rm(newAssets, { recursive: true, force: true })
+  await fsp.mkdir(newAssets, { recursive: true })
+  copy(assets, newAssets)
+ 
+  await mergeStyles(styleFolder, '.css', cssBundle)
+
+  let template = await fsp.readFile(templateFile, {encoding: 'utf-8'})
+  const componentsArr = await makeTextArr(componentsFiles, '.html')
+  componentsArr.textArrWithName.forEach((val) => {
+    template =  template.replace(new RegExp(`{{${val[0]}}}`,'g'), val[1])
   })
-})
+  const writeStreamHtml = fs.createWriteStream(newHtml)
+  writeStreamHtml.write(template)
+}
+setHtml()
